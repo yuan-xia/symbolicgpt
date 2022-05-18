@@ -364,7 +364,8 @@ class GPT(nn.Module):
                 input_embedding = torch.cat((points_embeddings, input_embedding), dim=1) # add point embedding as the first token
             else:
                 # TODO: I have to find a smarter way to replace this tile overhead
-                points_embeddings = torch.tile(points_embeddings, (1,token_embeddings.shape[1],1))
+                # points_embeddings = torch.tile(points_embeddings, (1,token_embeddings.shape[1],1))
+                points_embeddings = points_embeddings.repeat(1, token_embeddings.shape[1], 1)
 
                 if self.pointNetConfig.method == 'EMB_SUM':
                     # summation
@@ -392,7 +393,7 @@ class GPT(nn.Module):
 
         logits = self.head(x) # b, length, vocab_size
 
-        printCondition = random.random() < 0.001 and tokenizer is not None
+        printCondition = random.random() < 0.1 and tokenizer is not None
         if printCondition:
             Input, Logit = idx[0], logits.max(-1)[1][0]
             

@@ -37,7 +37,7 @@ def processData(numSamples, nv, decimals,
         # generate a formula
         # Create a new random equation
         try:
-            _, skeletonEqn, _ = dataGen( 
+            _, skeletonEqn, _, op = dataGen(
                                         nv = nv, decimals = decimals, 
                                         numberofPoints=numberofPoints, 
                                         supportPoints=supportPoints,
@@ -57,6 +57,9 @@ def processData(numSamples, nv, decimals,
                 idx = np.random.randint(len(templatesEQs[nv]))
                 skeletonEqn = templatesEQs[nv][idx]
 
+            if skeletonEqn == "C":
+                continue
+
         except Exception as e:
             # Handle any exceptions that timing might raise here
             print("\n-->dataGen(.) was terminated!\n{}\n".format(e))
@@ -74,12 +77,19 @@ def processData(numSamples, nv, decimals,
         for e in range(numSamplesEachEq):
             # replace the constants with new ones
             cleanEqn = ''
-            for chr in skeletonEqn:
-                if chr == 'C':
+            # for chr in skeletonEqn:
+            #     if chr == 'C':
+            #         # genereate a new random number
+            #         chr = '{}'.format(np.random.uniform(const_range[0], const_range[1]))
+            #     cleanEqn += chr
+            for index in range(len(skeletonEqn)):
+                chr =skeletonEqn[index]
+                if index+3 <= len(skeletonEqn) and skeletonEqn[index:index+3] == 'C*x':
                     # genereate a new random number
+                    chr = '{}'.format(np.random.uniform(0, const_range[1]))
+                elif skeletonEqn[index] == "C":
                     chr = '{}'.format(np.random.uniform(const_range[0], const_range[1]))
                 cleanEqn += chr
-
             if 'I' in cleanEqn or 'zoo' in cleanEqn:
                 # repeat the equation generation
                 print('This equation has been rejected: {}'.format(cleanEqn))
@@ -126,12 +136,26 @@ def processData(numSamples, nv, decimals,
             # sort data based on Y
             if sortY:
                 x,y = zip(*sorted(zip(x,y), key=lambda d: d[1]))
-            
+
+            temp = []
+            for n in y:
+                if op == ">":
+                    temp.append(1 if n > 0 else 0)
+                elif op == "<":
+                    temp.append(1 if n < 0 else 0)
+                elif op == "=":
+                    temp.append(1 if n == 0 else 0)
+            y = temp
+
+            # if sum(y) == 0 or all(n == 1 for n in y):
+            #     continue
+
+
             # hold data in the structure
             structure['X'] = list(x)
             structure['Y'] = y
-            structure['Skeleton'] = skeletonEqn
-            structure['EQ'] = cleanEqn
+            structure['Skeleton'] = skeletonEqn+op
+            structure['EQ'] = cleanEqn+op
 
             outputPath = dataPath.format(fileID, nv, time)
             if os.path.exists(outputPath):
@@ -151,15 +175,15 @@ def main():
     np.random.seed(seed=seed) # fix the seed for reproducibility
 
     #NOTE: For linux you can only use unique numVars, in Windows, it is possible to use [1,2,3,4] * 10!
-    numVars = list(range(1,10)) #[1,2,3,4,5]
-    decimals = 4
-    numberofPoints = [20,250] # only usable if support points has not been provided
+    numVars = [1]#list(range(1,10)) #[1,2,3,4,5]
+    decimals = 1
+    numberofPoints = [100,250] # only usable if support points has not been provided
     numSamples = 10000 # number of generated samples
     folder = './Dataset'
     dataPath = folder +'/{}_{}_{}.json'
 
     testPoints = False
-    trainRange = [-3.0,3.0] 
+    trainRange = [-10.0,10.0]#[-3.0,3.0]
     testRange = [[-5.0, 3.0],[-3.0, 5.0]] # this means Union((-5,-1),(1,5))
 
     supportPoints = None
@@ -173,22 +197,26 @@ def main():
     #supportPointsTest = np.linspace(xRange[0],xRange[1],numberofPoints[1])
     #supportPointsTest = [[np.round(p,decimals) for i in range(numVars[0])] for p in supportPointsTest]
     
-    n_levels = 4
+    n_levels = 3
     allow_constants = True
     const_range = [-2.1, 2.1]
     const_ratio = 0.5
+    # op_list=[
+    #             "id", "add", "mul",
+    #             "sin", "pow", "cos", "sqrt",
+    #             "exp", "div", "sub", "log",
+    #             "arcsin",
+    #         ]
     op_list=[
-                "id", "add", "mul",
-                "sin", "pow", "cos", "sqrt",
-                "exp", "div", "sub", "log",
-                "arcsin",
+                 "add", "mul",
+                "div", "sub",
             ]
-    exponents=[3, 4, 5, 6]
+    exponents=[2,3]#[3, 4, 5, 6]
 
     sortY = False # if the data is sorted based on y
     numSamplesEachEq = 5
     threshold = 5000
-    templateProb = 0.1 # the probability of generating an equation from the templates
+    templateProb = 0.0#0.1 # the probability of generating an equation from the templates
     templatesEQs = None # template equations, if NONE then there will be no specific templates for the generated equations
     templatesEQs = {
         1: [
@@ -197,15 +225,15 @@ def main():
             'C*x1**4+C*x1**3+C*x1**2+C*x1+C',
             'C*x1**5+C*x1**4+C*x1**3+C*x1**2+C*x1+C',
             'C*x1**6+C*x1**5+C*x1**4+C*x1**3+C*x1**2+C*x1+C',
-            'C*sin(C*x1**2)*cos(C*x1+C)+C',
-            'C*sin(C*x1+C)+C*sin(C*x1+C*x1**2)+C',
-            'C*log(C*x1+C)+C*log(C*x1**2+C)+C',
-            'C*sqrt(C*x1+C)+C',
+            # 'C*sin(C*x1**2)*cos(C*x1+C)+C',
+            # 'C*sin(C*x1+C)+C*sin(C*x1+C*x1**2)+C',
+            # 'C*log(C*x1+C)+C*log(C*x1**2+C)+C',
+            # 'C*sqrt(C*x1+C)+C',
             ],
         2: [
             # NGUYEN
-            'C*sin(C*x1+C)+C*sin(C*x2**2+C)+C',
-            'C*sin(C*x1+C)*cos(C*x2+C)+C',
+            # 'C*sin(C*x1+C)+C*sin(C*x2**2+C)+C',
+            # 'C*sin(C*x1+C)*cos(C*x2+C)+C',
             'C*x1**x2+C',
             'C*x1**4+C*x1**3+C*x2**2+C*x2+C',
             # # AI Faynman

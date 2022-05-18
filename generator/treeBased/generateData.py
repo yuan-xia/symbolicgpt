@@ -9,14 +9,14 @@ import sympy
 #import threading
 import numpy as np
 from sympy import sympify, expand
-from wrapt_timeout_decorator import *
+# from wrapt_timeout_decorator import *
 
 # try:
 #     import thread
 # except ImportError:
 #     import _thread as thread
 
-seed = 2021  # 2021 Train, 2022 Val, 2023 Test
+seed = 2022  # 2021 Train, 2022 Val, 2023 Test
 random.seed(seed)
 np.random.seed(seed=seed)  # we didn't use this line for the training data
 
@@ -73,7 +73,7 @@ def generate_random_eqn_raw(n_levels=2, n_vars=2, op_list=['id', 'sin'],
     eqn_vars = list(np.random.choice(range(1, (n_vars + 1)),
                     size=int(2 ** level_to_use), replace=True))
     max_bound = max(np.abs(const_min_val), np.abs(const_max_val))
-    eqn_weights = list(np.random.uniform(-1 * max_bound,
+    eqn_weights = list(np.random.uniform(0,
                        max_bound, size=len(eqn_vars)))
     eqn_biases = list(np.random.uniform(-1 * max_bound,
                       max_bound, size=len(eqn_vars)))
@@ -567,6 +567,8 @@ def dataGen(nv, decimals,
 
     cleanEqn = eqn_to_str(currEqn, n_vars=nv,
                           decimals=decimals)
+    inequalOp = np.random.choice([">","<"])
+#    rightConst = np.random.uniform(const_range[0],const_range[1])
     # skeletonEqn = eqn_to_str_skeleton_structure(
     # currEqn, n_vars=nv, decimals=decimals)
     skeletonEqn = eqn_to_str_skeleton(cleanEqn)
@@ -576,7 +578,7 @@ def dataGen(nv, decimals,
     #     dataTest = create_dataset_from_raw_eqn(currEqn, n_points=nPoints, n_vars=nv, decimals=decimals,
     #                                            supportPoints=supportPointsTest, min_x=testRange[0], max_x=testRange[1])
     #     return data[0], data[1], cleanEqn, skeletonEqn, dataTest[0], dataTest[1], currEqn
-    return cleanEqn, skeletonEqn, currEqn
+    return cleanEqn, skeletonEqn, currEqn, inequalOp
 
 ######################################
 # Use cases

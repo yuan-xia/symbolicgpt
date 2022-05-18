@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 from torch.nn import functional as F
 from numpy import * # to override the math functions
 from matplotlib import pyplot as plt
+from scipy.optimize import linprog
 
 def set_seed(seed):
     random.seed(seed)
@@ -64,8 +65,10 @@ def top_k_top_p_filtering(logits, top_k=0.0, top_p=0.0, filter_value=-float('Inf
         Nucleus filtering is described in Holtzman et al. (http://arxiv.org/abs/1904.09751)
     """
     #TODO: support for batch size more than 1
+
     assert logits.dim() == 1  # batch size 1 for now - could be updated for more but the code would be less clear
     top_k = min(top_k, logits.size(-1))  # Safety check
+
     if top_k > 0:
         # Remove all tokens with a probability less than the last token of the top-k
         indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
@@ -103,7 +106,9 @@ def sample_from_model(model, x, steps, points=None, variables=None, temperature=
         # optionally crop probabilities to only the top k options
 #         if top_k is not None:
 #             logits = top_k_logits(logits, top_k)
+#         print(logits)
         logits = top_k_top_p_filtering(logits, top_k=top_k, top_p=top_p)
+        # print(logits)
         # apply softmax to convert to probabilities
         probs = F.softmax(logits, dim=-1)
         # sample from the distribution or take the most likely
@@ -182,9 +187,9 @@ def tokenize_predict_and_evaluate(i, inputs, points, outputs, variables,
                                   modelKey='SymbolicGPT', device='cpu'):
     
     eq = ''.join([train_dataset.itos[int(i)] for i in outputs[0]])
-    eq = eq.strip(train_dataset.paddingToken).split('>')
+    eq = eq.strip(train_dataset.paddingToken).split('#')
     eq = eq[0] #if len(eq[0])>=1 else eq[1]
-    eq = eq.strip('<').strip(">")
+    eq = eq.strip('$').strip("#")
     print(eq)
     if variableEmbedding == 'STR_VAR':
             eq = eq.split(':')[-1]
@@ -215,6 +220,7 @@ def tokenize_predict_and_evaluate(i, inputs, points, outputs, variables,
 
     return eq, bestPredicted, bestErr
 
+
 def generate_sample_and_evaluate(model, t, eq, inputs, 
                                  blockSize, points, variables, 
                                  train_dataset, variableEmbedding):
@@ -237,9 +243,9 @@ def generate_sample_and_evaluate(model, t, eq, inputs,
     if variableEmbedding == 'STR_VAR':
         predicted = predicted.split(':')[-1]
 
-    predicted = predicted.strip(train_dataset.paddingToken).split('>')
+    predicted = predicted.strip(train_dataset.paddingToken).split('#')
     predicted = predicted[0] #if len(predicted[0])>=1 else predicted[1]
-    predicted = predicted.strip('<').strip(">")
+    predicted = predicted.strip('$').strip("#")
     predicted = predicted.replace('Ce','C*e')
 
     # train a regressor to find the constants (too slow)
@@ -343,7 +349,7 @@ def mse(y, y_hat):
     return our_sum / len(y_gold)
 
 # Relative Mean Square Error
-def relativeErr(y, yHat, info=False, eps=1e-5):
+def relativeErr(o,y, yHat, info=False, eps=1e-5):
     yHat = np.reshape(yHat, [1, -1])[0]
     y = np.reshape(y, [1, -1])[0]
     if len(y) > 0 and len(y)==len(yHat):
@@ -352,6 +358,7 @@ def relativeErr(y, yHat, info=False, eps=1e-5):
             for _ in range(5):
                 i = np.random.randint(len(y))
                 print('yPR,yTrue:{},{}, Err:{}'.format(yHat[i],y[i],err[i]))
+                o.write('yPR,yTrue:{},{}, Err:{}'.format(yHat[i],y[i],err[i]))
     else:
         err = 100
 
@@ -462,9 +469,9 @@ class CharDataset(Dataset):
         # encode every character in the equation to an integer
         # < is SOS, > is EOS
         if self.addVars:
-            dix = [self.stoi[s] for s in '<'+str(numVars)+':'+eq+'>']
+            dix = [self.stoi[s] for s in '$'+str(numVars)+':'+eq+'#']
         else:
-            dix = [self.stoi[s] for s in '<'+eq+'>']
+            dix = [self.stoi[s] for s in '$'+eq+'#']
         inputs = dix[:-1]
         outputs = dix[1:]
         
@@ -494,18 +501,21 @@ class CharDataset(Dataset):
             #x = [(e-minX[eID])/(maxX[eID]-minX[eID]+eps) for eID, e in enumerate(x)] # normalize x
             x = x + [0]*(max(self.numVars-len(x),0)) # padding
 
-            y = [xy[1]] if type(xy[1])==float or type(xy[1])==np.float64 else xy[1]
+            y = [xy[1]] if type(xy[1])==float or type(xy[1])==np.float64 or type(xy[1])==int else xy[1]
 
             #y = [(e-minY)/(maxY-minY+eps) for e in y]
             y = y + [0]*(max(self.numYs-len(y),0)) # padding
             p = x+y # because it is only one point 
             p = torch.tensor(p)
             #replace nan and inf
+            '''
             p = torch.nan_to_num(p, nan=self.threshold[1], 
                                  posinf=self.threshold[1], 
                                  neginf=self.threshold[0])
-            # p[p>self.threshold[1]] = self.threshold[1] # clip the upper bound
-            # p[p<self.threshold[0]] = self.threshold[0] # clip the lower bound
+                                 '''
+            p[p>self.threshold[1]] = self.threshold[1] # clip the upper bound
+            p[p<self.threshold[0]] = self.threshold[0] # clip the lower bound
+            p[torch.isnan(p)] = self.threshold[1]
             points[:,idx] = p
 
         # Normalize points between zero and one # DxN
@@ -518,9 +528,13 @@ class CharDataset(Dataset):
 
         # points -= points.mean()
         # points /= points.std()
+        '''
         points = torch.nan_to_num(points, nan=self.threshold[1],
                                  posinf=self.threshold[1],
-                                 neginf=self.threshold[0])
+                                 neginf=self.threshold[0])'''
+        points[points > self.threshold[1]] = self.threshold[1]  # clip the upper bound
+        points[points < self.threshold[0]] = self.threshold[0]  # clip the lower bound
+        points[torch.isnan(points)] = self.threshold[1]
 
         # if printInfoCondition:
         #     print(f'Points: {points}')
@@ -542,8 +556,46 @@ def processDataFiles(files):
             text = ''.join([lines,text])    
     return text
 
+def sigmoid(z):
+    # print(z)
+    res = min(max(-2147483648, np.exp(-z)), 2147483647)
+    return 1.0/(1 + res)
+
+
+# def solver(eq, X,Y):
+#     op = eq[-1]
+#     eq = eq[:-1]
+#     # print(constants)
+#     vars = re.findall('x[\d]+[\*\*\d]*',eq)
+#     for x,y in zip(X,Y):
+#         eqTemp = eq + ''
+#         if type(x) == np.float32:
+#             x = [x]
+#         for i,e in enumerate(x):
+#             # make sure e is not a tensor
+#             if type(e) == torch.Tensor:
+#                 e = e.item()
+#             for subeq in vars:
+#                 eqTemp = subeq.replace('x{}'.format(i+1), str(e))
+#                 eval(eqTemp)
+#         try:
+#
+#             yHat = eval(eqTemp)
+#         except:
+#             print('Exception has been occured! EQ: {}, OR: {}'.format(eqTemp, eq))
+#             continue
+#             yHat = 100
+
+
+
 def lossFunc(constants, eq, X, Y, eps=1e-5):
     err = 0
+
+    op = eq[-1]
+    eq = eq[:-1]
+    # print(re.findall('x[\d]+[\*\*\d]*',eq))
+    eq = eq.replace('C', '1.0',1)
+    # print(constants)
     eq = eq.replace('C','{}').format(*constants)
 
     for x,y in zip(X,Y):
@@ -556,6 +608,7 @@ def lossFunc(constants, eq, X, Y, eps=1e-5):
                 e = e.item()
             eqTemp = eqTemp.replace('x{}'.format(i+1), str(e))
         try:
+
             yHat = eval(eqTemp)
         except:
             print('Exception has been occured! EQ: {}, OR: {}'.format(eqTemp, eq))
@@ -563,13 +616,35 @@ def lossFunc(constants, eq, X, Y, eps=1e-5):
             yHat = 100
         try:
             # handle overflow
-            err += relativeErr(y, yHat) #(y-yHat)**2
+            if op == "<":
+                if y == 0:
+                    y = -1
+                z = -y*yHat
+                if z < 0:
+                    err += -np.log(sigmoid(z))
+                if z>0:
+                    err += 0
+                    # err += 1/z + sum(c**2 for c in constants)
+
+               # err += -np.log(sigmoid(-y*yHat)) + sum(c**2 for c in constants)
+            elif op == ">":
+                if y == 0:
+                    y = -1
+                z = y * yHat
+                if z < 0:
+                    err += -np.log(sigmoid(z))
+                if z>0:
+                    err += 0
+                #err += -np.log(sigmoid(y*yHat)) #+ sum(c**2 for c in constants)
+
+            #err += np.log(sigmoid(-y*yHat))#relativeErr(y, yHat) #(y-yHat)**2
         except:
             print('Exception has been occured! EQ: {}, OR: {}, y:{}-yHat:{}'.format(eqTemp, eq, y, yHat))
             continue
             err += 10
         
     err /= len(Y)
+    # print(err)
     return err
 
 def generateDataStrEq(eq, n_points=2, n_vars=3,
@@ -591,10 +666,13 @@ def generateDataStrEq(eq, n_points=2, n_vars=3,
         else:
             x = supportPoints[p]
 
-        tmpEq = eq + ''
+        tmpEq = eq[:-2] + ''
         for nVID in range(n_vars):
             tmpEq = tmpEq.replace('x{}'.format(nVID+1), str(x[nVID]))
-        y = float(np.round(eval(tmpEq), decimals))
+        try:
+            y = float(np.round(eval(tmpEq), decimals))
+        except:
+            y = 100000
         X.append(x)
         Y.append(y)
     return X, Y

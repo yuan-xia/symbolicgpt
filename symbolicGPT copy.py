@@ -31,7 +31,6 @@ from trainer import Trainer, TrainerConfig
 from models import GPT, GPTConfig, PointNetConfig
 from scipy.optimize import minimize, least_squares
 from utils import processDataFiles, CharDataset, relativeErr, mse, sqrt, divide, lossFunc
-from scipy.optimize import linprog
 
 # set the random seed
 set_seed(42)
@@ -39,18 +38,18 @@ set_seed(42)
 # config
 device='gpu'
 scratch=True # if you want to ignore the cache and start for scratch
-numEpochs = 20 # number of epochs to train the GPT+PT model
-embeddingSize = 512 # the hidden dimension of the representation of both GPT and PT
-numPoints=[100,101]#[30,31] # number of points that we are going to receive to make a prediction about f given x and y, if you don't know then use the maximum
+numEpochs = 3 # number of epochs to train the GPT+PT model
+embeddingSize = 128 # the hidden dimension of the representation of both GPT and PT
+numPoints=[30,31] # number of points that we are going to receive to make a prediction about f given x and y, if you don't know then use the maximum
 numVars=1 # the dimenstion of input points x, if you don't know then use the maximum
 numYs=1 # the dimension of output points y = f(x), if you don't know then use the maximum
 blockSize = 200 # spatial extent of the model for its context
 testBlockSize = 400
 batchSize = 128 # batch size of training data
 target = 'Skeleton' #'Skeleton' #'EQ'
-const_range = [-2.1,2.1]#[-2.1, 2.1] # constant range to generate during training only if target is Skeleton
-decimals = 1 # decimals of the points only if target is Skeleton
-trainRange = [-10.0,10.0]#[-3.0,3.0] # support range to generate during training only if target is Skeleton
+const_range = [-2.1, 2.1] # constant range to generate during training only if target is Skeleton
+decimals = 8 # decimals of the points only if target is Skeleton
+trainRange = [-3.0,3.0] # support range to generate during training only if target is Skeleton
 dataDir = './datasets/'
 dataInfo = 'XYE_{}Var_{}Points_{}EmbeddingSize'.format(numVars, numPoints, embeddingSize)
 titleTemplate = "{} equations of {} variables - Benchmark"
@@ -108,7 +107,7 @@ if os.path.isfile(train_file) and not scratch:
         train_dataset,trainText,chars = pickle.load(f)
 else:
     # process training files from scratch
-    path = '{}/{}/Train/-10_10_10000.json'.format(dataDir, dataFolder)
+    path = '{}/{}/Train/*.json'.format(dataDir, dataFolder)
     files = glob.glob(path)[:maxNumFiles]
     text = processDataFiles(files)
     chars = sorted(list(set(text))+['_','T','$','#',':']) # extract unique characters from the text before converting the text to a list, # T is for the test data
@@ -130,7 +129,7 @@ outputs = ''.join([train_dataset.itos[int(i)] for i in outputs])
 print('id:{}\ninputs:{}\noutputs:{}\npoints:{}\nvariables:{}'.format(idx,inputs,outputs,points, variables))
 
 # load the val dataset
-path = '{}/{}/Val/-10_10_1000.json'.format(dataDir,dataFolder)
+path = '{}/{}/Val/*.json'.format(dataDir,dataFolder)
 files = glob.glob(path)
 textVal = processDataFiles([files[0]])
 textVal = textVal.split('\n') # convert the raw text to a set of examples
@@ -147,7 +146,7 @@ outputs = ''.join([train_dataset.itos[int(i)] for i in outputs])
 print('id:{}\ninputs:{}\noutputs:{}\npoints:{}\nvariables:{}'.format(idx,inputs,outputs,points, variables))
 
 # load the test data
-path = f'{dataDir}/{dataTestFolder}/-10_10_1000.json'
+path = f'{dataDir}/{dataTestFolder}/*.json'
 print(f'test path is {path}')
 files = glob.glob(path)
 textTest = processDataFiles(files)
@@ -215,11 +214,8 @@ try:
     with open(fName, 'w', encoding="utf-8") as o:
         resultDict[fName] = {'SymbolicGPT':[]}
 
-        count = 0
-        mismatch = 0
-
         for i, batch in enumerate(loader):
-            count +=1
+                
             inputs,outputs,points,variables = batch
 
             print('Test Case {}.'.format(i))
@@ -255,21 +251,17 @@ try:
             predicted = predicted.strip(train_dataset.paddingToken).split('#')
             predicted = predicted[0] #if len(predicted[0])>=1 else predicted[1]
             predicted = predicted.strip('$').strip("#")
-
-            print('Target:{}\nSkeleton:{}'.format(target+"0", predicted+"0"))
-            if target[-1] != predicted[-1]:
-                mismatch += 1
+            
+            print('Target:{}\nSkeleton:{}'.format(target, predicted))
+            
             o.write('{}\n'.format(target+"0"))
             o.write('{}:\n'.format('SymbolicGPT'))
             o.write('{}\n'.format(predicted+"0"))
 
-
+            op = predicted[-1]
+            predicted = predicted[:-1]
             # train a regressor to find the constants (too slow)
             c = [1.0 for i,x in enumerate(predicted) if x=='C'] # initialize coefficients as 1
-
-            c.pop()
-            print(c)
-
             # c[-1] = 0 # initialize the constant as zero
             b = [(-2,2) for i,x in enumerate(predicted) if x=='C']  # bounds on variables
             try:
@@ -277,18 +269,18 @@ try:
                     # This is the bottleneck in our algorithm
                     # for easier comparison, we are using minimize package  
                     cHat = minimize(lossFunc, c, #bounds=b,
-                                   args=(predicted, t['X'], t['Y']))
-                    predicted = predicted.replace('C', '1.0',1)
+                                   args=(predicted, t['X'], t['Y'])) 
+        
                     predicted = predicted.replace('C','{}').format(*cHat.x)
 
             except ValueError:
-                raise 'Err: Wrong Equation {}'.format(predicted+"0")
+                raise 'Err: Wrong Equation {}'.format(predicted+op+"0")
             except Exception as e:
-                raise 'Err: Wrong Equation {}, Err: {}'.format(predicted+"0", e)
+                raise 'Err: Wrong Equation {}, Err: {}'.format(predicted+op+"0", e)
 
             # TODO: let's enjoy GPU
 
-            print('Skeleton+LS:{}'.format(predicted+"0"))
+            print('Skeleton+LS:{}'.format(predicted+op+"0"))
 
             Ys = [] #t['YT']
             Yhats = []
@@ -305,11 +297,11 @@ try:
                         eqTmp = eqTmp.replace('x{}'.format(i+1), str(x))
                         if ',' in eqTmp:
                             assert 'There is a , in the equation!'
-                    YEval = eval(eqTmp)
+                    YEval = 1 if eval(eqTmp) else 0
                     # YEval = 0 if np.isnan(YEval) else YEval
                     # YEval = 100 if np.isinf(YEval) else YEval
                 except:
-                    print('TA: For some reason, we used the default value. Eq:{}'.format(eqTmp+opTmp+"0"))
+                    print('TA: For some reason, we used the default value. Eq:{}'.format(eqTmp))
                     # break
                     print(i)
                     # raise
@@ -318,8 +310,6 @@ try:
                 Ys.append(YEval)
                 try:
                     eqTmp = predicted + '' # copy eq
-                    opTmp = eqTmp[-1]
-                    eqTmp = eqTmp[:-1]
                     eqTmp = eqTmp.replace(' ','')
                     eqTmp = eqTmp.replace('\n','')
                     # eqTmp += "0"
@@ -328,15 +318,15 @@ try:
                         eqTmp = eqTmp.replace('x{}'.format(i+1), str(x))
                         if ',' in eqTmp:
                             assert 'There is a , in the equation!'
-                    Yhat = eval(eqTmp)
+                    Yhat = 1 if eval(eqTmp) else 0
                     # Yhat = 0 if np.isnan(Yhat) else Yhat
                     # Yhat = 100 if np.isinf(Yhat) else Yhat
                 except:
-                    print('PR: For some reason, we used the default value. Eq:{}'.format(eqTmp+opTmp+"0"))
+                    print('PR: For some reason, we used the default value. Eq:{}'.format(eqTmp))
                     break
                     Yhat = 100
                 Yhats.append(Yhat)
-            err = relativeErr(o,Ys,Yhats, info=True)
+            err = relativeErr(Ys,Yhats, info=True)
 
             if type(err) is np.complex128 or np.complex:
                 err = abs(err.real)
@@ -344,7 +334,7 @@ try:
             resultDict[fName]['SymbolicGPT'].append(err)
 
             o.write('{}\n{}\n\n'.format( 
-                                    predicted+"0",
+                                    predicted,
                                     err
                                     ))
 
@@ -352,7 +342,6 @@ try:
             
             print('') # just an empty line
     print('Avg Err:{}'.format(np.mean(resultDict[fName]['SymbolicGPT'])))
-    print(mismatch/count)
     
 except KeyboardInterrupt:
     print('KeyboardInterrupt')
